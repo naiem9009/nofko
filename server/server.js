@@ -1,23 +1,40 @@
-import express from "express"
+import express, { json } from "express"
 import mongoose from "mongoose"
 import morgan from "morgan"
 import "dotenv/config"
 import bcrypt from 'bcrypt'
 import { nanoid } from "nanoid"
+import multer from "multer"
 import jwt from "jsonwebtoken"
+import cors from "cors"
+import admin from "firebase-admin"
+import {getAuth} from "firebase-admin/auth"
+import serviceAccountKey from "./nofko-2f05e-firebase-adminsdk-tsc14-d3f2f065d6.json" assert {type: "json"}
+
+import path from 'path';
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
+const __dirname = path.dirname(__filename); // get the name of the directory
 
 // Schema
 import User from "./Schema/User.js"
 
 const server = express()
-const PORT = 5000
+const PORT = 3300
 
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccountKey)
+})
+
+
+server.use(cors())
+server.use(express.static(path.join(__dirname, 'public')))
 server.use(express.json())
 server.use(morgan('dev'))
 
 
-let emailRegex = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/; // regex for email
-let passwordRegex = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z]).{6,20}$/; // regex for password
+const emailRegex = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/; // regex for email
+const passwordRegex = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z]).{6,20}$/; // regex for password
 
 
 mongoose.connect(process.env.DB_LOCATION, {
@@ -47,6 +64,30 @@ const generateUserName = async (email) => {
 
     return username;
 }
+
+
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, `${__dirname}/public/data/uploads`)
+    },
+    filename: function (req, file, cb) {
+      const uploadDateTime = new Date().getTime()
+      cb(null, nanoid() + '-' + uploadDateTime + '.jpeg')
+    }
+})
+
+// image upload
+const upload = multer({storage})
+
+server.post('/upload-image', upload.single('upload_image'), function (req, res) {
+
+    const image_url = `${req.protocol}://${req.headers.host}/data/uploads/${req.file.filename}`
+
+    res.status(201).json({"image_url": image_url})
+});
+
+
 
 server.post('/signup', (req, res) => {
     const {fullname, email, password} = req.body
@@ -99,12 +140,80 @@ server.post('/signin', async (req, res) => {
     const {email, password} = req.body
 
     await User.findOne({'personal_info.email': email}).then(user => {
-        console.log(user);
-        return res.status(200).json({'status' : 'got user document'})
+        if (!user){
+            return res.status(200).json({'status' : 'Email Not found'})
+        }
+        
+        if (user.google_auth) return res.status(403).json({"error": "Account was created using google. Try logging in with Google"})
+        
+        bcrypt.compare(password, user.personal_info.password, (err, result) => {
+            if (err) return res.status(403).json({"error": "Error occured while login please try again"})
+
+            if (!result) {
+                return res.status(403).json({"error": "Incorrect Password"})
+            } else {
+                return res.status(200).json(formatDataSend(user))
+            }
+        })
+
+        
     }) .catch(err => {
-        console.log(err);
-        return res.status(403).json({"error": "Email not found"})
+        console.log(err.message);
+        return res.status(403).json({"error": err.message})
     })
+})
+
+
+server.post('/google-auth', async (req, res) => {
+    const {access_token} = req.body
+
+    getAuth().verifyIdToken(access_token).then(async decode_user => {
+        const {email, name, picture} = decode_user;
+
+        console.log({email, name, picture});
+
+        let user = await User.findOne({'personal_info.email' : email}).select("personal_info.fullname personal_info.username personal_info.profile_img google_auth").then(user => user || null).catch(err => {
+            res.status(500).json({"error": err.message})
+        })
+
+        if (user) {
+            if (!user.google_auth) {
+                return res.status(403).json({"error": "This email was signed up without google. Please login with password to access the account"})
+            }
+
+            return res.status(200).json(formatDataSend(user))
+        } else {
+            const username = await generateUserName(email)
+            
+
+            user = new User({
+                personal_info: {
+                    fullname: name,
+                    email,
+                    profile_img: picture,
+                    username,
+                },
+
+                google_auth: true
+            })
+
+            await user.save().then(save_user => user = save_user)
+            .catch(err => {
+                return res.status(500).json({"error": err.message})
+            })
+
+
+            console.log(user);
+            return res.status(200).json(formatDataSend(user))
+        }
+
+
+
+        
+    }) .catch(() => {
+        return res.status(500).json({"error": "Failed to authenticate you with google. Try with some other google account"})
+    })
+
 })
 
 
