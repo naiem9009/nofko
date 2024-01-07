@@ -7,6 +7,7 @@ import { nanoid } from "nanoid"
 import multer from "multer"
 import jwt from "jsonwebtoken"
 import cors from "cors"
+import {verifyJWT} from "./middleware/jwt.js"
 import admin from "firebase-admin"
 import {getAuth} from "firebase-admin/auth"
 import serviceAccountKey from "./nofko-2f05e-firebase-adminsdk-tsc14-d3f2f065d6.json" assert {type: "json"}
@@ -18,6 +19,7 @@ const __dirname = path.dirname(__filename); // get the name of the directory
 
 // Schema
 import User from "./Schema/User.js"
+import Blog from "./Schema/Blog.js"
 
 const server = express()
 const PORT = 3300
@@ -213,6 +215,73 @@ server.post('/google-auth', async (req, res) => {
     }) .catch(() => {
         return res.status(500).json({"error": "Failed to authenticate you with google. Try with some other google account"})
     })
+
+})
+
+
+
+server.get('/latest-blogs', (req, res) => {
+    const maxLimit = 5
+    Blog.find({draft: false}).populate("author", "personal_info.username personal_info.profile_img personal_info.fullname -_id").sort({"publishedAt": 1}).select("blog_id title des banner activity tags publishedAt -_id").limit(maxLimit).then(blogs => {
+        return res.status(200).json({blogs})
+    }) .catch(err => {
+        return res.status(500).json({"error": err.message})
+    })
+
+    
+})
+
+server.get('/trending-blogs', (req, res) => {
+    Blog.find({draft: false}).populate("author", "personal_info.profile_img personal_info.username personal_info.fullname -_id").sort({"activity.total_read": -1, "activity.total_likes": -1}).select("blog_id title publishedAt, -_id").limit(5)
+    .then(blogs => {
+        return res.status(200).json({blogs})
+    }).catch(err => {
+        return res.status(500).json({"error": err.message})
+    })
+})
+
+
+
+
+server.post('/create-blog', verifyJWT, (req, res) => {
+    const authorId = req.user
+    const {title, des, banner, tags, content, draft=false} = req.body
+
+    if (!title.length) return res.status(403).json({"error": "You must provide a title to publish the blog" })
+
+    if (!draft) {
+        if (!des.length || des.length > 200) return res.status(403).json({"error": "You must provide a description under 200 charecters" })
+
+        if (!banner.length) return res.status(403).json({"error": "You must provide blog banner to publish it"})
+    
+        if (!content.blocks.length) return res.status(403).json({"error": "There must be some blog content to publish it"})
+    
+        if (!tags.length) return res.status(403).json({"error": "Provide tags in order to publish the blog, maximum 10"})
+    }
+
+
+    const lw_tags = tags?.map(tag => tag.toLowerCase())
+
+    const blog_id = title.replace(/[^a-zA-Z0-9]/g, ' ').replace(/\s+/g, "-").trim() + nanoid()
+
+    const blog = new Blog({
+        title, des, banner, content, tags: lw_tags, author: authorId, blog_id, draft: Boolean(draft)
+    })
+
+    console.log(blog_id);
+
+    blog.save().then(blog => {
+        const incrementVal = draft ? 0 : 1
+
+        User.findOneAndUpdate({_id: authorId}, {$set:{"account_info.total_post": incrementVal}, $push:{"blogs": blog._id}}).then(user => {
+            return res.status(200).json({id: blog.blog_id})
+        }).catch(err => {
+            return res.status(403).json({"error": err.message})
+        })
+    })
+
+    
+
 
 })
 

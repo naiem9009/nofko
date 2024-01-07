@@ -1,7 +1,7 @@
 
 
 import React, { useContext, useEffect, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import logo from "../imgs/nofko-logo.png"
 import AnimationWrapper from '../common/page-animation'
 import defaultBanner from "../imgs/blog-banner.png"
@@ -10,20 +10,26 @@ import {Toaster, toast} from "react-hot-toast"
 import { EditorContext } from '../pages/editor.pages'
 import Editorjs from "@editorjs/editorjs"
 import { tools } from './tools.component'
+import axios from 'axios'
+import { UserContext } from '../App'
 
 const BlogEditor = () => {
 
     const {blog, blog:  {title, banner, content, tags, des}, setBlog, textEditor, setTextEditor, setEditorState} = useContext(EditorContext)
+    const {userAuth: {access_token}} = useContext(UserContext)
 
+
+    const navigate = useNavigate()
 
     // useEffect
     useEffect(() => {
+        if (!textEditor.isReady) {
         setTextEditor(new Editorjs({
             holderId: "textEditor",
             data: content,
             tools: tools,
             placeholder: "Let's Write an awesome story"
-        }))
+        }))}
     }, [])
 
 
@@ -98,6 +104,53 @@ const BlogEditor = () => {
     }
 
 
+    const handleSaveDraft = (e) => {
+        if (e.target.className.includes('disable')) return;
+        if (!title.length) return toast.error(`Writing blog title before saving it as a draft`)
+
+        // if (!des.length || des.length > characterLimit) return toast.error(`Write a description about your blog withing ${characterLimit} characters to publish`)
+
+
+
+        const loadingToast = toast.loading("Saving Draft...")
+        // e.target.classList.add('disable')
+    
+
+        if (textEditor.isReady) {
+            textEditor.save().then(content => {
+                const blogObj = {
+                    title,
+                    banner,
+                    des,
+                    content,
+                    draft: true,
+                    tags
+                  }
+              
+                  axios.post(`${import.meta.env.VITE_SERVER_DOMAIN}/create-blog`, blogObj, {
+                    headers: {
+                      'Authorization': `Bearer ${access_token}`
+                    }
+                  }).then(() => {
+                    // e.target.classList.add('disable')
+                    toast.dismiss(loadingToast)
+                    toast.success("Saved 😍")
+              
+                    setTimeout(() => {
+                      navigate('/')
+                    }, 500)
+                  }).catch(({response}) => {
+                    e.target.classList.add('disable')
+                    toast.dismiss(loadingToast)
+              
+                    return toast.error(response?.data?.error)
+                  })
+            })
+        }
+
+    }
+
+
     
 
 
@@ -121,7 +174,10 @@ const BlogEditor = () => {
                 <button className='btn-dark py-2'
                 onClick={handlePublishEvent}
                 >Publish</button>
-                <button className='btn-dark py-2'>Dave Draft</button>
+                <button 
+                onClick={handleSaveDraft}
+                className='btn-dark py-2'
+                >Dave Draft</button>
             </div>
 
         </nav>
